@@ -1,0 +1,10 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+# glzdb は glaze に依存する
+find_dependency(glaze CONFIG)
+
+include("${CMAKE_CURRENT_LIST_DIR}/glzdbTargets.cmake")
+
+check_required_components(glzdb)
