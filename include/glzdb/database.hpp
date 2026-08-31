@@ -31,6 +31,12 @@ struct database {
   State                 state;           ///< 保持中のテーブル群
   std::filesystem::path path;            ///< 永続化先パス
 
+  // コピーは二重 flush を招くため禁止、ムーブのみ許可
+  database(const database&)            = delete;
+  database& operator=(const database&) = delete;
+  database(database&&) noexcept        = default;
+  database& operator=(database&&) noexcept = default;
+
   /// @brief データベースを開く (または新規作成)
   ///
   /// 既存ファイルがあれば一度だけ読み込む。読み込み失敗時はエラーを返す。
@@ -41,12 +47,12 @@ struct database {
     if (!loaded) {
       return std::unexpected(loaded.error());
     }
-    return database{std::move(*loaded), path};
+    return database(std::move(*loaded), path, true);
   }
 
   /// @brief デストラクタ — flush_on_destruct が真なら破壊時に状態をフラッシュ
   ~database() {
-    if (flush_on_destruct) {
+    if (flush_on_destruct_) {
       (void)flush();
     }
   }
@@ -55,8 +61,20 @@ struct database {
   /// @return 成功時は none、失敗時はエラーコード
   error flush() const { return Adapter::template save<State>(state, path); }
 
-  /// @brief 破棄時自動フラッシュの切り替え (デフォルト: true)
-  bool flush_on_destruct = true;
+  /// @brief 破棄時自動フラッシュの切り替え
+  /// @param v true でデストラクタ時に自動 flush
+  void set_flush_on_destruct(bool v) noexcept { flush_on_destruct_ = v; }
+  /// @brief 破棄時自動フラッシュが有効か
+  [[nodiscard]] bool flush_on_destruct() const noexcept { return flush_on_destruct_; }
+
+ private:
+  bool flush_on_destruct_ = true;  ///< デストラクタでの自動 flush 有効フラグ
+
+  /// @brief 内部用コンストラクタ
+  database(State&& s, std::filesystem::path p, bool do_flush)
+      : state(std::move(s)), path(std::move(p)), flush_on_destruct_(do_flush) {}
+
+ public:
 
   /// @brief 型安全ルーティング: コンパイル時にテーブルを取得 (登録不要)
   /// @tparam T モデル型
@@ -101,6 +119,8 @@ struct database {
   /// @tparam T モデル型
   /// @param id 主キー
   /// @return 見つかった行へのポインタ、不存在時は nullptr
+  /// @warning 返却ポインタは `std::map` ノードを指す。次の `insert`/`update` は安定だが
+  ///          `remove` で該当行を削除するとダングリングになる。次の書き込みまで有効と考えること
   template <class T>
   const T* get(const id_type<T>& id) const {
     const auto& rows = tables<T>().rows;
@@ -113,6 +133,8 @@ struct database {
   /// @brief 全行を値の range として取得 (コピーなし)
   /// @tparam T モデル型
   /// @return マップ値のビュー
+  /// @warning ビューは `state` 内の `std::map` を直接参照する。`insert`/`remove` でイテレータが
+  ///          無効化される可能性があるため、書き込みと同時走査は避けること
   template <class T>
   auto get_all() const {
     const auto& rows = tables<T>().rows;
@@ -124,6 +146,7 @@ struct database {
   /// @tparam Member メンバポインタ (例: &User::name)
   /// @param value 一致させる値
   /// @return マッチする行へのポインタのベクタ
+  /// @warning 返却ポインタは `std::map` ノードを指す。`remove` で該当行を削除するとダングリングになる
   template <auto Member>
   std::vector<const member_owner_t<Member>*> get_all_by(const member_value_t<Member>& value) const
     requires std::is_member_object_pointer_v<decltype(Member)>
@@ -177,6 +200,7 @@ struct database {
   /// @tparam Member 外部キーとなるメンバポインタ
   /// @param parent_id 親の主キー
   /// @return 子行へのポインタのベクタ
+  /// @warning 返却ポインタは `std::map` ノードを指す。`remove` で子行を削除するとダングリングになる
   template <auto Member>
   std::vector<const member_owner_t<Member>*> related(const member_value_t<Member>& parent_id) const
     requires std::is_member_object_pointer_v<decltype(Member)>
@@ -192,10 +216,15 @@ struct database {
   /// @tparam Child 子モデル型
   /// @param child 子行
   /// @return 親行へのポインタ、見つからなければ nullptr
+  /// @warning 返却ポインタは `std::map` ノードを指す。親を `remove` するとダングリングになる
   template <class Parent, auto Member, class Child>
   const Parent* parent(const Child& child) const
     requires std::is_member_object_pointer_v<decltype(Member)>
   {
+    static_assert(std::same_as<member_owner_t<Member>, Child>,
+                  "Member は Child のメンバでなければならない");
+    static_assert(std::same_as<member_value_t<Member>, id_type<Parent>>,
+                  "Member の値型は Parent の id_type と一致しなければならない");
     const auto& rows = tables<Parent>().rows;
     if (const auto it = rows.find(child.*Member); it != rows.end()) {
       return &it->second;

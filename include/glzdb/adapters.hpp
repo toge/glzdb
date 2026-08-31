@@ -133,6 +133,9 @@ struct JsonAdapter {
 ///
 /// 各テーブルを `<name_of<T>>.json` というファイル名で、
 /// ディレクトリ `path` の下に出力・読み込みする。
+/// @warning 異なる namespace で同名の型を State に含めるとファイル名が衝突する。
+///          衝突はコンパイル時に static_assert で検出され、`glz::meta<T>` で
+///          `name` を上書きする必要がある。
 struct JsonPartitionedAdapter {
   /// @brief ディレクトリ内の各テーブルファイルを読み込み State を復元
   /// @tparam State 状態型 (std::tuple<テーブル...>)
@@ -140,6 +143,8 @@ struct JsonPartitionedAdapter {
   /// @return 読み込んだ State、またはエラー
   template <class State>
   static result<State> load(const std::filesystem::path& path) {
+    static_assert(!has_duplicate_table_names<State>(),
+                  "JsonPartitionedAdapter: テーブル名が重複しています。異なる namespace で同名の型がある場合は glz::meta<T> で name を上書きしてください");
     State state;
     return load_impl(state, path, std::make_index_sequence<std::tuple_size_v<State>>{});
   }
@@ -151,6 +156,8 @@ struct JsonPartitionedAdapter {
   /// @return 成功時は none、失敗時はエラーコード
   template <class State>
   static error save(const State& state, const std::filesystem::path& path) {
+    static_assert(!has_duplicate_table_names<State>(),
+                  "JsonPartitionedAdapter: テーブル名が重複しています。異なる namespace で同名の型がある場合は glz::meta<T> で name を上書きしてください");
     std::error_code sys;
     std::filesystem::create_directories(path, sys);
     if (sys) {

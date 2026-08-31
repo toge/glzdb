@@ -1,7 +1,9 @@
 #pragma once
 
+#include <array>
 #include <concepts>
 #include <string_view>
+#include <tuple>
 #include <type_traits>
 #include <utility>
 
@@ -70,6 +72,10 @@ using member_value_t = typename member_value_t_<Member>::type;
 /// glz::name_v<T> は ( namespace 修飾された) 型名にフォールバックし、
 /// それを detail::simple_type_name() で最後の ':' 以降に切り出して
 /// テーブルファイル名を予測可能にする。
+/// @warning 異なる namespace に同名の型があると単純名が衝突し、同一 `<name>.json`
+///          に上書きされる。`JsonPartitionedAdapter` 使用時は `glz::meta<T>` で
+///          `name` を上書きするか、型名を別にすること。衝突はコンパイル時に
+///          `static_assert` で検出される。
 /// @tparam T モデル型
 template <class T>
 consteval auto name_of() {
@@ -80,5 +86,34 @@ consteval auto name_of() {
 /// @brief name_of<T>() の constexpr キャッシング版
 template <class T>
 constexpr std::string_view name_of_v = name_of<T>();
+
+namespace detail {
+  template <class State, std::size_t... Is>
+  constexpr bool has_duplicate_impl(std::index_sequence<Is...>) {
+    constexpr std::array<std::string_view, sizeof...(Is)> names{
+        name_of_v<typename std::tuple_element_t<Is, State>::value_type>...};
+    for (std::size_t i = 0; i < names.size(); ++i) {
+      for (std::size_t j = i + 1; j < names.size(); ++j) {
+        if (names[i] == names[j]) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+}  // namespace detail
+
+/// @brief Partitioned 用にテーブル名の重複を検出
+/// @details State タプル内の全テーブルで name_of_v が重複していないか判定
+/// @tparam State テーブルタプル型
+template <class State>
+constexpr bool has_duplicate_table_names() {
+  constexpr std::size_t N = std::tuple_size_v<State>;
+  if constexpr (N <= 1) {
+    return false;
+  } else {
+    return detail::has_duplicate_impl<State>(std::make_index_sequence<N>{});
+  }
+}
 
 }  // namespace glzdb

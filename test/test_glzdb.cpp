@@ -1,3 +1,6 @@
+#include <atomic>
+#include <chrono>
+#include <filesystem>
 #include <string>
 #include <tuple>
 
@@ -25,6 +28,15 @@ using Db    = glzdb::database<State, glzdb::JsonAdapter>;
 User make_user(const uint64_t id, const std::string& name) {
   return {id, name};
 }
+
+/// @brief 並列実行でも衝突しない一意な一時ディレクトリを生成
+inline std::filesystem::path make_temp_dir(const std::string_view prefix) {
+  static std::atomic<uint64_t> counter{0};
+  const auto ts  = std::chrono::high_resolution_clock::now().time_since_epoch().count();
+  const auto cnt = counter.fetch_add(1);
+  return std::filesystem::temp_directory_path() /
+         (std::string(prefix) + "_" + std::to_string(ts) + "_" + std::to_string(cnt));
+}
 }  // namespace
 
 TEST_CASE("traits: id_type と name_of") {
@@ -36,7 +48,7 @@ TEST_CASE("traits: id_type と name_of") {
 }
 
 TEST_CASE("database: open で空の db が生成され CRUD 一周") {
-  const auto dir = std::filesystem::temp_directory_path() / "glzdb_test_open";
+  const auto dir = make_temp_dir("glzdb_test_open");
   std::filesystem::remove_all(dir);
   std::filesystem::create_directories(dir);
   const auto path = dir / "db.json";
@@ -69,7 +81,7 @@ TEST_CASE("database: open で空の db が生成され CRUD 一周") {
 }
 
 TEST_CASE("database: flush() が明示的に永続化する") {
-  const auto dir = std::filesystem::temp_directory_path() / "glzdb_test_flush";
+  const auto dir = make_temp_dir("glzdb_test_flush");
   std::filesystem::remove_all(dir);
   std::filesystem::create_directories(dir);
   const auto path = dir / "db.json";
@@ -91,7 +103,7 @@ TEST_CASE("database: flush() が明示的に永続化する") {
 }
 
 TEST_CASE("database: CRUD insert/get/update/remove/count") {
-  const auto dir = std::filesystem::temp_directory_path() / "glzdb_test_crud";
+  const auto dir = make_temp_dir("glzdb_test_crud");
   std::filesystem::remove_all(dir);
   std::filesystem::create_directories(dir);
 
@@ -137,7 +149,7 @@ TEST_CASE("database: CRUD insert/get/update/remove/count") {
 }
 
 TEST_CASE("database: get_all と get_all_by") {
-  const auto dir = std::filesystem::temp_directory_path() / "glzdb_test_getall";
+  const auto dir = make_temp_dir("glzdb_test_getall");
   std::filesystem::remove_all(dir);
   std::filesystem::create_directories(dir);
 
@@ -169,7 +181,7 @@ TEST_CASE("database: get_all と get_all_by") {
 }
 
 TEST_CASE("database: リレーション (related / parent)") {
-  const auto dir = std::filesystem::temp_directory_path() / "glzdb_test_rel";
+  const auto dir = make_temp_dir("glzdb_test_rel");
   std::filesystem::remove_all(dir);
   std::filesystem::create_directories(dir);
 
@@ -200,7 +212,7 @@ TEST_CASE("database: リレーション (related / parent)") {
 }
 
 TEST_CASE("database: 破損ファイル -> open 時に parse_error") {
-  const auto dir = std::filesystem::temp_directory_path() / "glzdb_test_corrupt";
+  const auto dir = make_temp_dir("glzdb_test_corrupt");
   std::filesystem::remove_all(dir);
   std::filesystem::create_directories(dir);
   const auto path = dir / "db.json";
@@ -218,7 +230,7 @@ TEST_CASE("database: 破損ファイル -> open 時に parse_error") {
 }
 
 TEST_CASE("partitioned アダプタ: テーブル毎ファイルのラウンドトリップ") {
-  const auto dir = std::filesystem::temp_directory_path() / "glzdb_test_part";
+  const auto dir = make_temp_dir("glzdb_test_part");
   std::filesystem::remove_all(dir);
   std::filesystem::create_directories(dir);
   const auto dbdir = dir / "dbdir";
@@ -250,7 +262,7 @@ TEST_CASE("partitioned アダプタ: テーブル毎ファイルのラウンド�
 }
 
 TEST_CASE("partitioned アダプタ: テーブルファイルが無い場合は空で開始") {
-  const auto dir = std::filesystem::temp_directory_path() / "glzdb_test_part_missing";
+  const auto dir = make_temp_dir("glzdb_test_part_missing");
   std::filesystem::remove_all(dir);
   std::filesystem::create_directories(dir);
   const auto dbdir = dir / "dbdir";
@@ -274,9 +286,172 @@ TEST_CASE("error: message 文字列は空でない") {
   REQUIRE(!glzdb::message(glzdb::error::parse_error).empty());
 }
 
+TEST_CASE("database: コピー不可・ムーブ可能") {
+  STATIC_REQUIRE(!std::is_copy_constructible_v<Db>);
+  STATIC_REQUIRE(!std::is_copy_assignable_v<Db>);
+  STATIC_REQUIRE(std::is_move_constructible_v<Db>);
+  STATIC_REQUIRE(std::is_move_assignable_v<Db>);
+}
+
+TEST_CASE("database: set_flush_on_destruct で自動 flush を無効化") {
+  const auto dir  = make_temp_dir("glzdb_test_noflush");
+  std::filesystem::remove_all(dir);
+  std::filesystem::create_directories(dir);
+  const auto path = dir / "db.json";
+
+  {
+    auto db = Db::open(path);
+    REQUIRE(db);
+    db->set_flush_on_destruct(false);
+    REQUIRE(!db->flush_on_destruct());
+    REQUIRE(db->insert(make_user(1, "alice")));
+    // デストラクタで flush されない
+  }
+  {
+    auto db = Db::open(path);
+    REQUIRE(db);
+    // flush されていないので空
+    REQUIRE(db->count<User>() == 0);
+  }
+
+  std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("partitioned: 破損ファイル -> parse_error") {
+  const auto dir = make_temp_dir("glzdb_test_part_corrupt");
+  std::filesystem::remove_all(dir);
+  std::filesystem::create_directories(dir);
+  const auto dbdir = dir / "dbdir";
+  std::filesystem::create_directories(dbdir);
+
+  // User.json に不正 JSON を書き込む
+  {
+    std::ofstream f(dbdir / "User.json");
+    f << "{ not valid json }";
+  }
+
+  using Pdb = glzdb::database<State, glzdb::JsonPartitionedAdapter>;
+  auto db   = Pdb::open(dbdir);
+  REQUIRE(!db);
+  REQUIRE(db.error() == glzdb::error::parse_error);
+
+  std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("partitioned: 部分的に破損したテーブルでも先頭エラーが返る") {
+  const auto dir = make_temp_dir("glzdb_test_part_partial");
+  std::filesystem::remove_all(dir);
+  std::filesystem::create_directories(dir);
+  const auto dbdir = dir / "dbdir";
+
+  using Pdb = glzdb::database<State, glzdb::JsonPartitionedAdapter>;
+  {
+    auto db = Pdb::open(dbdir);
+    REQUIRE(db);
+    REQUIRE(db->insert(make_user(1, "alice")));
+    REQUIRE(db->insert(Post{10, 1, "hello"}));
+    REQUIRE(db->flush() == glzdb::error::none);
+  }
+  // Post.json を破損させる
+  {
+    std::ofstream f(dbdir / "Post.json", std::ios::trunc);
+    f << "INVALID";
+  }
+  auto db = Pdb::open(dbdir);
+  REQUIRE(!db);
+  REQUIRE(db.error() == glzdb::error::parse_error);
+
+  std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("partitioned: 存在しないディレクトリからの open は空で成功") {
+  const auto dir   = make_temp_dir("glzdb_test_part_empty");
+  std::filesystem::remove_all(dir);
+  // dir 自体を作らず dbdir も不存在の状態で open
+  const auto dbdir = dir / "new_dbdir";
+  REQUIRE(!std::filesystem::exists(dbdir));
+
+  using Pdb = glzdb::database<State, glzdb::JsonPartitionedAdapter>;
+  {
+    auto db = Pdb::open(dbdir);
+    REQUIRE(db);
+    REQUIRE(db->count<User>() == 0);
+    // flush でディレクトリが作成される
+    REQUIRE(db->flush() == glzdb::error::none);
+    REQUIRE(std::filesystem::exists(dbdir));
+  }
+
+  std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("大量データの永続化 (Unified, 1000件)") {
+  const auto dir = make_temp_dir("glzdb_test_bulk");
+  std::filesystem::remove_all(dir);
+  std::filesystem::create_directories(dir);
+  const auto path = dir / "db.json";
+
+  {
+    auto db = Db::open(path);
+    REQUIRE(db);
+    for (uint64_t i = 1; i <= 1000; ++i) {
+      REQUIRE(db->insert(User{i, "user" + std::to_string(i)}));
+    }
+    REQUIRE(db->count<User>() == 1000);
+    REQUIRE(db->flush() == glzdb::error::none);
+  }
+  {
+    auto db = Db::open(path);
+    REQUIRE(db);
+    REQUIRE(db->count<User>() == 1000);
+    REQUIRE(db->get<User>(1)->name == "user1");
+    REQUIRE(db->get<User>(500)->name == "user500");
+    REQUIRE(db->get<User>(1000)->name == "user1000");
+    // remove 後の永続化も確認
+    REQUIRE(db->remove<User>(500));
+    REQUIRE(db->flush() == glzdb::error::none);
+  }
+  {
+    auto db = Db::open(path);
+    REQUIRE(db);
+    REQUIRE(db->count<User>() == 999);
+    REQUIRE(db->get<User>(500) == nullptr);
+  }
+
+  std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("大量データの永続化 (Partitioned, 500件)") {
+  const auto dir   = make_temp_dir("glzdb_test_bulk_part");
+  std::filesystem::remove_all(dir);
+  std::filesystem::create_directories(dir);
+  const auto dbdir = dir / "dbdir";
+
+  using Pdb = glzdb::database<State, glzdb::JsonPartitionedAdapter>;
+  {
+    auto db = Pdb::open(dbdir);
+    REQUIRE(db);
+    for (uint64_t i = 1; i <= 500; ++i) {
+      REQUIRE(db->insert(User{i, "u" + std::to_string(i)}));
+      REQUIRE(db->insert(Post{i, i, "post" + std::to_string(i)}));
+    }
+    REQUIRE(db->count<User>() == 500);
+    REQUIRE(db->count<Post>() == 500);
+    REQUIRE(db->flush() == glzdb::error::none);
+  }
+  {
+    auto db = Pdb::open(dbdir);
+    REQUIRE(db);
+    REQUIRE(db->count<User>() == 500);
+    REQUIRE(db->count<Post>() == 500);
+    REQUIRE(db->get<Post>(250)->title == "post250");
+  }
+
+  std::filesystem::remove_all(dir);
+}
+
 /// @brief ponytail スタイルのセルフチェック: テスト内の簡易 end-to-end デモ
 TEST_CASE("demo: end-to-end") {
-  const auto dir = std::filesystem::temp_directory_path() / "glzdb_test_demo";
+  const auto dir = make_temp_dir("glzdb_test_demo");
   std::filesystem::remove_all(dir);
   std::filesystem::create_directories(dir);
 
