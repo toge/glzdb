@@ -1,7 +1,6 @@
 #pragma once
 
 #include <map>
-#include <type_traits>
 
 #include "traits.hpp"
 
@@ -24,18 +23,5 @@ struct table {
 
   map_type rows;   ///< id -> 行のマップ
 };
-
-/// @brief テーブルの背後にあるモデル型を取得
-/// @details model_of<table<T>> == T
-template <class T>
-struct model_of_t {
-  using type = T;
-};
-template <class T>
-struct model_of_t<table<T>> {
-  using type = T;
-};
-template <class T>
-using model_of = typename model_of_t<std::remove_cvref_t<T>>::type;
 
 }  // namespace glzdb

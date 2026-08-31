@@ -35,12 +35,7 @@ concept has_id_member = requires(T t) {
 /// @brief モデルの主キー型を取得 (decltype(T::id))
 /// @tparam T モデル型
 template <class T>
-struct id_type_t {
-  using type = decltype(std::declval<T&>().id);
-};
-
-template <class T>
-using id_type = typename id_type_t<T>::type;
+using id_type = decltype(std::declval<T&>().id);
 
 /// @brief メンバポインタの所有者型を取得
 /// @details member_owner_t<&T::member> == T

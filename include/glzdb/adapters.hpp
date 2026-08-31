@@ -16,14 +16,6 @@
 namespace glzdb {
 namespace detail {
 
-  /// @brief glaze のエラーを glzdb のエラーにマッピング
-  /// @details ロード経路内の glaze 失敗はすべて parse_error (不正 JSON / スキーマ不一致) として扱う
-  /// @param ec glaze エラーコンテキスト
-  /// @return 対応する glzdb::error
-  inline error map_error(const glz::error_ctx& ec) noexcept {
-    return bool(ec) ? error::parse_error : error::none;
-  }
-
   /// @brief ファイル `path` の内容を `value` へ読み込む
   /// @details ファイルが存在しない場合は false を返す (呼び出し側が判断)。
   ///          ファイルが存在するが解析に失敗した場合は parse_error を返す。
@@ -57,7 +49,7 @@ namespace detail {
     std::string buffer;
     const auto  ec = glz::write_json(value, buffer);
     if (bool(ec)) {
-      return map_error(ec);
+      return error::parse_error;
     }
 
     auto tmp = path;
@@ -196,7 +188,7 @@ struct JsonPartitionedAdapter {
     }
     using T         = std::tuple_element_t<I, State>;
     auto&      rows = std::get<I>(state).rows;
-    const auto file = dir / (std::string{name_of_v<model_of<T>>} + ".json");
+    const auto file = dir / (std::string{name_of_v<typename T::value_type>} + ".json");
     auto       res  = detail::read_file_into(rows, file);
     if (!res) {
       first_error = res.error();  // ファイルが壊れている
@@ -224,7 +216,7 @@ struct JsonPartitionedAdapter {
     }
     using T          = std::tuple_element_t<I, State>;
     const auto& rows = std::get<I>(state).rows;
-    const auto  file = dir / (std::string{name_of_v<model_of<T>>} + ".json");
+    const auto  file = dir / (std::string{name_of_v<typename T::value_type>} + ".json");
     first_error      = detail::write_atomic(rows, file);
   }
 };
