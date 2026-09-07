@@ -35,7 +35,7 @@ using glzdb_wasi_smoke::User;
 using State = std::tuple<glzdb::table<glzdb_wasi_smoke::User>, glzdb::table<glzdb_wasi_smoke::Post>>;
 using Db    = glzdb::database<State, glzdb::JsonAdapter>;
 
-int fail(const char* msg) {
+int fail(const char* const msg) noexcept {
   std::puts(msg);
   return 1;
 }

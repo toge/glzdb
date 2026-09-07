@@ -23,7 +23,7 @@ using Db    = glzdb::database<State, glzdb::JsonAdapter>;
 
 namespace {
 /// @brief 全 ToDo を一覧表示
-void list(Db& db) {
+void list(const Db& db) {
   std::cout << "todos (" << db.count<Todo>() << "):\n";
   for (const auto& t : db.get_all<Todo>()) {
     std::cout << "  [" << (t.done ? 'x' : ' ') << "] #" << t.id << " " << t.title << '\n';
