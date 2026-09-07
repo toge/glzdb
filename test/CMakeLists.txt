@@ -1,8 +1,6 @@
 find_package(Catch2 REQUIRED CONFIG)
 
-file(GLOB test_src test_*.cpp)
-
-add_executable(all_test ${test_src})
+add_executable(all_test test_glzdb.cpp)
 
 target_link_libraries(all_test PRIVATE
   glzdb::glzdb

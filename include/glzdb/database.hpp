@@ -32,17 +32,28 @@ struct database {
   std::filesystem::path path;            ///< 永続化先パス
 
   // コピーは二重 flush を招くため禁止、ムーブのみ許可
+  // ムーブ元は flush_on_destruct_ を false に倒す (空 path への無駄 flush 防止)
   database(const database&)            = delete;
   database& operator=(const database&) = delete;
-  database(database&&) noexcept        = default;
-  database& operator=(database&&) noexcept = default;
+  database(database&& o) noexcept
+      : state(std::move(o.state)),
+        path(std::move(o.path)),
+        flush_on_destruct_(std::exchange(o.flush_on_destruct_, false)) {}
+  database& operator=(database&& o) noexcept {
+    if (this != &o) {
+      state              = std::move(o.state);
+      path               = std::move(o.path);
+      flush_on_destruct_ = std::exchange(o.flush_on_destruct_, false);
+    }
+    return *this;
+  }
 
   /// @brief データベースを開く (または新規作成)
   ///
   /// 既存ファイルがあれば一度だけ読み込む。読み込み失敗時はエラーを返す。
   /// @param path 永続化ファイル (またはディレクトリ) のパス
   /// @return 開いたデータベース、またはエラー
-  static result<database> open(const std::filesystem::path& path) {
+  [[nodiscard]] static result<database> open(const std::filesystem::path& path) {
     auto loaded = Adapter::template load<State>(path);
     if (!loaded) {
       return std::unexpected(loaded.error());
@@ -59,7 +70,7 @@ struct database {
 
   /// @brief 全状態をアダプタ経由で永続化
   /// @return 成功時は none、失敗時はエラーコード
-  error flush() const { return Adapter::template save<State>(state, path); }
+  [[nodiscard]] error flush() const { return Adapter::template save<State>(state, path); }
 
   /// @brief 破棄時自動フラッシュの切り替え
   /// @param v true でデストラクタ時に自動 flush
@@ -96,7 +107,7 @@ struct database {
   /// @param row 挿入する行
   /// @return 成功時は空の expected、失敗時はエラー
   template <class T>
-  result<void> insert(const T& row) {
+  [[nodiscard]] result<void> insert(const T& row) {
     auto& rows                = tables<T>().rows;
     const auto [it, inserted] = rows.emplace(row.id, row);
     if (!inserted) {
@@ -110,7 +121,7 @@ struct database {
   /// @param row 挿入/更新する行
   /// @return 成功時は空の expected
   template <class T>
-  result<void> upsert(const T& row) {
+  [[nodiscard]] result<void> upsert(const T& row) {
     tables<T>().rows[row.id] = row;
     return {};
   }
@@ -122,7 +133,7 @@ struct database {
   /// @warning 返却ポインタは `std::map` ノードを指す。次の `insert`/`update` は安定だが
   ///          `remove` で該当行を削除するとダングリングになる。次の書き込みまで有効と考えること
   template <class T>
-  const T* get(const id_type<T>& id) const {
+  [[nodiscard]] const T* get(const id_type<T>& id) const {
     const auto& rows = tables<T>().rows;
     if (const auto it = rows.find(id); it != rows.end()) {
       return &it->second;
@@ -136,7 +147,7 @@ struct database {
   /// @warning ビューは `state` 内の `std::map` を直接参照する。`insert`/`remove` でイテレータが
   ///          無効化される可能性があるため、書き込みと同時走査は避けること
   template <class T>
-  auto get_all() const {
+  [[nodiscard]] auto get_all() const {
     const auto& rows = tables<T>().rows;
     return rows | std::views::values;
   }
@@ -148,7 +159,7 @@ struct database {
   /// @return マッチする行へのポインタのベクタ
   /// @warning 返却ポインタは `std::map` ノードを指す。`remove` で該当行を削除するとダングリングになる
   template <auto Member>
-  std::vector<const member_owner_t<Member>*> get_all_by(const member_value_t<Member>& value) const
+  [[nodiscard]] std::vector<const member_owner_t<Member>*> get_all_by(const member_value_t<Member>& value) const
     requires std::is_member_object_pointer_v<decltype(Member)>
   {
     using T = member_owner_t<Member>;
@@ -167,7 +178,7 @@ struct database {
   /// @param row 更新する行
   /// @return 成功時は空の expected、失敗時はエラー
   template <class T>
-  result<void> update(const T& row) {
+  [[nodiscard]] result<void> update(const T& row) {
     auto& rows = tables<T>().rows;
     if (const auto it = rows.find(row.id); it != rows.end()) {
       it->second = row;
@@ -181,7 +192,7 @@ struct database {
   /// @param id 主キー
   /// @return 削除された場合は true、存在しない場合は false
   template <class T>
-  bool remove(const id_type<T>& id) {
+  [[nodiscard]] bool remove(const id_type<T>& id) {
     return tables<T>().rows.erase(id) > 0;
   }
 
@@ -189,7 +200,7 @@ struct database {
   /// @tparam T モデル型
   /// @return テーブル内の行数
   template <class T>
-  std::size_t count() const {
+  [[nodiscard]] std::size_t count() const {
     return tables<T>().rows.size();
   }
 
@@ -202,7 +213,7 @@ struct database {
   /// @return 子行へのポインタのベクタ
   /// @warning 返却ポインタは `std::map` ノードを指す。`remove` で子行を削除するとダングリングになる
   template <auto Member>
-  std::vector<const member_owner_t<Member>*> related(const member_value_t<Member>& parent_id) const
+  [[nodiscard]] std::vector<const member_owner_t<Member>*> related(const member_value_t<Member>& parent_id) const
     requires std::is_member_object_pointer_v<decltype(Member)>
   {
     return get_all_by<Member>(parent_id);
@@ -218,7 +229,7 @@ struct database {
   /// @return 親行へのポインタ、見つからなければ nullptr
   /// @warning 返却ポインタは `std::map` ノードを指す。親を `remove` するとダングリングになる
   template <class Parent, auto Member, class Child>
-  const Parent* parent(const Child& child) const
+  [[nodiscard]] const Parent* parent(const Child& child) const
     requires std::is_member_object_pointer_v<decltype(Member)>
   {
     static_assert(std::same_as<member_owner_t<Member>, Child>,

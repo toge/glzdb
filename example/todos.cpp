@@ -1,11 +1,13 @@
 /// @file todos.cpp
 /// @brief glzdb バックエンドの簡易 ToDo CLI
 
+#include <charconv>
 #include <cstdint>
 #include <filesystem>
 #include <iostream>
 #include <optional>
 #include <string>
+#include <system_error>
 #include <tuple>
 
 #include <glzdb.hpp>
@@ -30,11 +32,12 @@ void list(Db& db) {
 
 /// @brief 文字列を uint64_t の id にパース (失敗時は nullopt)
 std::optional<uint64_t> parse_id(const std::string& s) {
-  try {
-    return std::stoull(s);
-  } catch (...) {
+  uint64_t value{};
+  const auto res = std::from_chars(s.data(), s.data() + s.size(), value);
+  if (res.ec != std::errc{} || res.ptr != s.data() + s.size()) {
     return std::nullopt;
   }
+  return value;
 }
 }  // namespace
 
@@ -79,7 +82,8 @@ int main() {
         std::cout << "usage: add <title>\n";
         continue;
       }
-      // v1 では明示的な id を使用; シンプルな max+1 カウンタをメモリ上に保持
+      // v1 では明示的な id を使用
+      // ponytail: O(n) max+1 scan, fine for CLI; 性能が必要なら next_id カウンタを永続化
       uint64_t next = 1;
       for (const auto& t : db->get_all<Todo>()) {
         next = std::max(next, t.id + 1);

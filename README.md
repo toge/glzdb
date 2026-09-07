@@ -120,6 +120,7 @@ db.parent<User, &Post::user_id>(post);    // belongs_to: post の親
 ## 永続化と安全性
 
 - 全書き込み: 一時ファイルへ書いて `std::filesystem::rename` で置換 (同一 FS 上で原子)
+- Partitioned はファイル単位で原子、DB全体では非原子 (途中クラッシュで新旧混在し得る)。全体原子性が必要なら Unified を使うこと
 - `open` で一度だけ読み込み。増分同期なし
 - シングルプロセス前提、ファイルロックなし (`// ponytail: single-process` コメント)
 - `flush_on_destruct` トグル (既定 true)

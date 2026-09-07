@@ -293,6 +293,33 @@ TEST_CASE("database: コピー不可・ムーブ可能") {
   STATIC_REQUIRE(std::is_move_assignable_v<Db>);
 }
 
+TEST_CASE("database: ムーブ元のデストラクタは flush しない") {
+  const auto dir = make_temp_dir("glzdb_test_move");
+  std::filesystem::remove_all(dir);
+  std::filesystem::create_directories(dir);
+  const auto path = dir / "db.json";
+
+  {
+    auto db = Db::open(path);
+    REQUIRE(db);
+    REQUIRE(db->insert(make_user(1, "alice")));
+
+    Db moved(std::move(*db));
+    REQUIRE(!db->flush_on_destruct());  // ムーブ元は武装解除
+    REQUIRE(moved.count<User>() == 1);
+    REQUIRE(moved.flush() == glzdb::error::none);
+
+    // ムーブ代入でもムーブ元は武装解除される
+    auto other = Db::open(dir / "other.json");
+    REQUIRE(other);
+    *other = std::move(moved);
+    REQUIRE(!moved.flush_on_destruct());
+    REQUIRE(other->count<User>() == 1);
+  }
+
+  std::filesystem::remove_all(dir);
+}
+
 TEST_CASE("database: set_flush_on_destruct で自動 flush を無効化") {
   const auto dir  = make_temp_dir("glzdb_test_noflush");
   std::filesystem::remove_all(dir);

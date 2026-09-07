@@ -31,6 +31,8 @@ CheckOptions:
     value:           camelBack
   - key:             readability-identifier-naming.MemberCase
     value:           lower_case
+  - key:             readability-identifier-naming.StructCase
+    value:           lower_case
   - key:             readability-identifier-naming.ParameterCase
     value:           lower_case
   - key:             readability-identifier-naming.UnionCase

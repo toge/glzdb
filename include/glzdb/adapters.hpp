@@ -104,7 +104,8 @@ concept adapter_for = requires(const std::filesystem::path& path, const State& s
 /// @brief 単一 JSON ファイルアダプタ (Unified)
 ///
 /// 全 State を 1 つの JSON ファイルへ読み書きする。
-struct JsonAdapter {
+/// 書き込みはファイル全体で atomic (tmp+rename で一括置換)。
+struct JsonAdapter {  // NOLINT(readability-identifier-naming): 公開API名として CamelCase を維持
   /// @brief ファイルから State を読み込む。ファイル不存在時は空で生成
   /// @tparam State 状態型
   /// @param path ファイルパス
@@ -133,10 +134,12 @@ struct JsonAdapter {
 ///
 /// 各テーブルを `<name_of<T>>.json` というファイル名で、
 /// ディレクトリ `path` の下に出力・読み込みする。
+/// @warning 各ファイル単位では atomic だが DB 全体では非 atomic:
+///          途中クラッシュで新旧テーブルが混在し得る。全体原子性が必要なら JsonAdapter を使うこと。
 /// @warning 異なる namespace で同名の型を State に含めるとファイル名が衝突する。
 ///          衝突はコンパイル時に static_assert で検出され、`glz::meta<T>` で
 ///          `name` を上書きする必要がある。
-struct JsonPartitionedAdapter {
+struct JsonPartitionedAdapter {  // NOLINT(readability-identifier-naming): 公開API名として CamelCase を維持
   /// @brief ディレクトリ内の各テーブルファイルを読み込み State を復元
   /// @tparam State 状態型 (std::tuple<テーブル...>)
   /// @param path ディレクトリパス
@@ -149,7 +152,7 @@ struct JsonPartitionedAdapter {
     return load_impl(state, path, std::make_index_sequence<std::tuple_size_v<State>>{});
   }
 
-  /// @brief ディレクトリ内にテーブル毎ファイルを atomic 書き込み
+  /// @brief ディレクトリ内にテーブル毎ファイルを書き込み (各ファイルは atomic、全体は非 atomic)
   /// @tparam State 状態型
   /// @param state 書き込み対象
   /// @param path ディレクトリパス
