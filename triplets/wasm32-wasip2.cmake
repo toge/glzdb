@@ -1,0 +1,12 @@
+set(VCPKG_TARGET_ARCHITECTURE wasm32)
+set(VCPKG_CRT_LINKAGE static)
+set(VCPKG_LIBRARY_LINKAGE static)
+set(VCPKG_CMAKE_SYSTEM_NAME WASI)
+# wasi-sdk の場所は環境により異なるため、存在する方を優先
+if(EXISTS "/opt/wasi-sdk/share/cmake/wasi-sdk-p2.cmake")
+  set(VCPKG_CHAINLOAD_TOOLCHAIN_FILE "/opt/wasi-sdk/share/cmake/wasi-sdk-p2.cmake")
+elseif(EXISTS "$ENV{HOME}/vm/wasi-sdk/share/cmake/wasi-sdk-p2.cmake")
+  set(VCPKG_CHAINLOAD_TOOLCHAIN_FILE "$ENV{HOME}/vm/wasi-sdk/share/cmake/wasi-sdk-p2.cmake")
+else()
+  set(VCPKG_CHAINLOAD_TOOLCHAIN_FILE "/opt/wasi-sdk/share/cmake/wasi-sdk-p2.cmake")
+endif()

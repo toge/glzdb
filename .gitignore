@@ -1,5 +1,7 @@
 build
 build_static
+build-wasip1
+build-wasip2
 save-commands.json
 
 # Prerequisites

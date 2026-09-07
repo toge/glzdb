@@ -23,6 +23,12 @@ add_compile_options(
     $<$<CXX_COMPILER_ID:MSVC>:/W4>
 )
 
+if(CMAKE_SYSTEM_NAME STREQUAL "WASI")
+  # wasi-sdk の sysroot には C++ 例外ランタイムが無いため無効化する。
+  # throw は abort になる。glzdb 自体は例外を投げず std::expected で返す。
+  add_compile_options(-fno-exceptions)
+endif()
+
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
