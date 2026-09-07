@@ -8,8 +8,6 @@
 
 #include <glzdb.hpp>
 
-namespace {
-
 /// @brief 主キー (`id`) を持つモデル
 struct User {
   uint64_t    id;
@@ -24,6 +22,8 @@ struct Post {
 
 using State = std::tuple<glzdb::table<User>, glzdb::table<Post>>;
 using Db    = glzdb::database<State, glzdb::JsonAdapter>;
+
+namespace {
 
 User make_user(const uint64_t id, const std::string& name) {
   return {id, name};
