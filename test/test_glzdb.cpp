@@ -503,3 +503,343 @@ TEST_CASE("demo: end-to-end") {
 
   std::filesystem::remove_all(dir);
 }
+
+// -- Phase 1 テスト ---------------------------------------------------
+
+TEST_CASE("auto-id: next_id と insert_new") {
+  const auto dir = make_temp_dir("glzdb_test_autoid");
+  std::filesystem::remove_all(dir);
+  std::filesystem::create_directories(dir);
+
+  auto db = Db::open(dir / "db.json");
+  REQUIRE(db);
+
+  // 空テーブルでは next_id は 1
+  REQUIRE(db->next_id<User>() == 1);
+
+  // insert_new で自動採番
+  auto id1 = db->insert_new(User{0, "alice"});
+  REQUIRE(id1);
+  REQUIRE(*id1 == 1);
+  REQUIRE(db->get<User>(1)->name == "alice");
+
+  // 連続採番
+  auto id2 = db->insert_new(User{0, "bob"});
+  REQUIRE(id2);
+  REQUIRE(*id2 == 2);
+
+  // next_id は max+1
+  REQUIRE(db->next_id<User>() == 3);
+
+  std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("batch: insert_range") {
+  const auto dir = make_temp_dir("glzdb_test_batch");
+  std::filesystem::remove_all(dir);
+  std::filesystem::create_directories(dir);
+
+  auto db = Db::open(dir / "db.json");
+  REQUIRE(db);
+
+  // 一括挿入
+  std::vector<User> users{{1, "a"}, {2, "b"}, {3, "c"}};
+  REQUIRE(db->insert_range<User>(users));
+  REQUIRE(db->count<User>() == 3);
+
+  // 重複時はエラー
+  std::vector<User> dups{{3, "x"}, {4, "y"}};
+  auto err = db->insert_range<User>(dups);
+  REQUIRE(!err);
+  REQUIRE(err.error() == glzdb::error::duplicate_key);
+
+  std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("batch: remove_if") {
+  const auto dir = make_temp_dir("glzdb_test_removeif");
+  std::filesystem::remove_all(dir);
+  std::filesystem::create_directories(dir);
+
+  auto db = Db::open(dir / "db.json");
+  REQUIRE(db);
+
+  for (uint64_t i = 1; i <= 5; ++i) {
+    REQUIRE(db->insert(User{i, "user" + std::to_string(i)}));
+  }
+
+  // 偶数 id を削除
+  auto removed = db->remove_if<User>([](const User& u) { return u.id % 2 == 0; });
+  REQUIRE(removed == 2);
+  REQUIRE(db->count<User>() == 3);
+  REQUIRE(db->get<User>(1) != nullptr);
+  REQUIRE(db->get<User>(2) == nullptr);
+  REQUIRE(db->get<User>(3) != nullptr);
+  REQUIRE(db->get<User>(4) == nullptr);
+  REQUIRE(db->get<User>(5) != nullptr);
+
+  std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("find: find_if / find_all_if") {
+  const auto dir = make_temp_dir("glzdb_test_findif");
+  std::filesystem::remove_all(dir);
+  std::filesystem::create_directories(dir);
+
+  auto db = Db::open(dir / "db.json");
+  REQUIRE(db);
+
+  REQUIRE(db->insert(make_user(1, "alice")));
+  REQUIRE(db->insert(make_user(2, "bob")));
+  REQUIRE(db->insert(make_user(3, "alice")));
+
+  // find_if: 最初の一致
+  const auto* found = db->find_if<User>([](const User& u) { return u.name == "alice"; });
+  REQUIRE(found != nullptr);
+  REQUIRE(found->id == 1);
+
+  // find_if: 不一致
+  const auto* none = db->find_if<User>([](const User& u) { return u.name == "nobody"; });
+  REQUIRE(none == nullptr);
+
+  // find_all_if: 全一致
+  auto all = db->find_all_if<User>([](const User& u) { return u.name == "alice"; });
+  REQUIRE(all.size() == 2);
+  REQUIRE(all[0]->id == 1);
+  REQUIRE(all[1]->id == 3);
+
+  std::filesystem::remove_all(dir);
+}
+
+// -- Phase 2 テスト ---------------------------------------------------
+
+TEST_CASE("fk: remove_parent restrict") {
+  const auto dir = make_temp_dir("glzdb_test_fk_restrict");
+  std::filesystem::remove_all(dir);
+  std::filesystem::create_directories(dir);
+
+  auto db = Db::open(dir / "db.json");
+  REQUIRE(db);
+
+  REQUIRE(db->insert(make_user(1, "alice")));
+  REQUIRE(db->insert(Post{10, 1, "hello"}));
+
+  // restrict なので子ありは削除拒否
+  auto err = db->remove_parent<User, &Post::user_id, Post>(1, Db::on_delete::restrict);
+  REQUIRE(!err);
+  REQUIRE(err.error() == glzdb::error::foreign_key_violation);
+  REQUIRE(db->count<User>() == 1);  // 削除されていない
+
+  std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("fk: remove_parent cascade") {
+  const auto dir = make_temp_dir("glzdb_test_fk_cascade");
+  std::filesystem::remove_all(dir);
+  std::filesystem::create_directories(dir);
+
+  auto db = Db::open(dir / "db.json");
+  REQUIRE(db);
+
+  REQUIRE(db->insert(make_user(1, "alice")));
+  REQUIRE(db->insert(Post{10, 1, "hello"}));
+  REQUIRE(db->insert(Post{11, 1, "world"}));
+
+  // cascade なので子も連鎖削除
+  REQUIRE(db->remove_parent<User, &Post::user_id, Post>(1, Db::on_delete::cascade));
+  REQUIRE(db->count<User>() == 0);
+  REQUIRE(db->count<Post>() == 0);
+
+  std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("fk: remove_parent nullify") {
+  const auto dir = make_temp_dir("glzdb_test_fk_nullify");
+  std::filesystem::remove_all(dir);
+  std::filesystem::create_directories(dir);
+
+  auto db = Db::open(dir / "db.json");
+  REQUIRE(db);
+
+  REQUIRE(db->insert(make_user(1, "alice")));
+  REQUIRE(db->insert(Post{10, 1, "hello"}));
+
+  // nullify なので子の FK が 0 に
+  REQUIRE(db->remove_parent<User, &Post::user_id, Post>(1, Db::on_delete::nullify));
+  REQUIRE(db->count<User>() == 0);
+  REQUIRE(db->count<Post>() == 1);
+  REQUIRE(db->get<Post>(10)->user_id == 0);
+
+  std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("schema: migrate callback") {
+  const auto dir = make_temp_dir("glzdb_test_migrate");
+  std::filesystem::remove_all(dir);
+  std::filesystem::create_directories(dir);
+
+  // 最初にデータを作成
+  {
+    auto db = Db::open(dir / "db.json");
+    REQUIRE(db);
+    REQUIRE(db->insert(make_user(1, "alice")));
+    REQUIRE(db->flush() == glzdb::error::none);
+  }
+
+  // migrate 関数が呼ばれることを確認
+  bool migrate_called = false;
+  auto migrate = [&migrate_called](State& /*s*/) { migrate_called = true; };
+
+  auto db = Db::open(dir / "db.json", migrate);
+  REQUIRE(db);
+  REQUIRE(migrate_called);
+  REQUIRE(db->count<User>() == 1);
+
+  std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("serialize: to_json / from_json") {
+  const auto dir = make_temp_dir("glzdb_test_json");
+  std::filesystem::remove_all(dir);
+  std::filesystem::create_directories(dir);
+
+  auto db = Db::open(dir / "db.json");
+  REQUIRE(db);
+
+  REQUIRE(db->insert(make_user(1, "alice")));
+  REQUIRE(db->insert(make_user(2, "bob")));
+
+  // to_json
+  auto json = db->to_json<User>();
+  REQUIRE(json);
+  REQUIRE(json->find("alice") != std::string::npos);
+  REQUIRE(json->find("bob") != std::string::npos);
+
+  // from_json (置換)
+  REQUIRE(db->insert(make_user(3, "carol")));
+  REQUIRE(db->count<User>() == 3);
+
+  std::string new_json = R"({"4":{"id":4,"name":"dave"}})";
+  REQUIRE(db->from_json<User>(new_json));
+  REQUIRE(db->count<User>() == 1);
+  REQUIRE(db->get<User>(4)->name == "dave");
+
+  std::filesystem::remove_all(dir);
+}
+
+// -- Phase 3 テスト ---------------------------------------------------
+
+TEST_CASE("NullAdapter: 永続化しない") {
+  const auto dir = make_temp_dir("glzdb_test_nulladapt");
+  std::filesystem::remove_all(dir);
+  std::filesystem::create_directories(dir);
+
+  using Ndb = glzdb::database<State, glzdb::NullAdapter>;
+
+  {
+    auto db = Ndb::open(dir / "db.json");
+    REQUIRE(db);
+    REQUIRE(db->insert(make_user(1, "alice")));
+    REQUIRE(db->insert(Post{10, 1, "hello"}));
+    REQUIRE(db->flush() == glzdb::error::none);
+  }
+
+  // ファイルが作られていない
+  REQUIRE(!std::filesystem::exists(dir / "db.json"));
+
+  // 再オープンは空
+  {
+    auto db = Ndb::open(dir / "db.json");
+    REQUIRE(db);
+    REQUIRE(db->count<User>() == 0);
+    REQUIRE(db->count<Post>() == 0);
+  }
+
+  std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("compact: メモリ最適化") {
+  const auto dir = make_temp_dir("glzdb_test_compact");
+  std::filesystem::remove_all(dir);
+  std::filesystem::create_directories(dir);
+
+  auto db = Db::open(dir / "db.json");
+  REQUIRE(db);
+
+  // 大量insert後に削除してcompact
+  for (uint64_t i = 1; i <= 100; ++i) {
+    REQUIRE(db->insert(User{i, "u" + std::to_string(i)}));
+  }
+  auto removed = db->remove_if<User>([](const User& u) { return u.id <= 50; });
+  REQUIRE(removed == 50);
+  REQUIRE(db->count<User>() == 50);
+
+  // compact が正常に完了する
+  db->compact();
+  REQUIRE(db->count<User>() == 50);
+  REQUIRE(db->get<User>(51)->name == "u51");
+
+  std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("hooks: on_insert / on_remove") {
+  const auto dir = make_temp_dir("glzdb_test_hooks");
+  std::filesystem::remove_all(dir);
+  std::filesystem::create_directories(dir);
+
+  auto db = Db::open(dir / "db.json");
+  REQUIRE(db);
+
+  std::vector<User> inserted;
+  std::vector<User> removed;
+
+  db->set_on_insert<User>([&inserted](const User& u) { inserted.push_back(u); });
+  db->set_on_remove<User>([&removed](const User& u) { removed.push_back(u); });
+
+  REQUIRE(db->insert(make_user(1, "alice")));
+  REQUIRE(db->insert(make_user(2, "bob")));
+  REQUIRE(inserted.size() == 2);
+  REQUIRE(inserted[0].name == "alice");
+  REQUIRE(inserted[1].name == "bob");
+
+  REQUIRE(db->remove<User>(1));
+  REQUIRE(removed.size() == 1);
+  REQUIRE(removed[0].name == "alice");
+
+  // upsert でもフックが呼ばれる
+  REQUIRE(db->upsert(make_user(2, "robert")));
+  REQUIRE(inserted.size() == 3);
+  REQUIRE(inserted[2].name == "robert");
+
+  std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("meta: table_key で別名") {
+  const auto dir = make_temp_dir("glzdb_test_metakey");
+  std::filesystem::remove_all(dir);
+  std::filesystem::create_directories(dir);
+
+  // glz::meta で name を別名に
+  using AliasDb = glzdb::database<State, glzdb::JsonPartitionedAdapter>;
+
+  {
+    auto db = AliasDb::open(dir / "dbdir");
+    REQUIRE(db);
+    REQUIRE(db->insert(make_user(1, "alice")));
+    REQUIRE(db->insert(Post{10, 1, "hello"}));
+    REQUIRE(db->flush() == glzdb::error::none);
+
+    // デフォルトは型名
+    REQUIRE(std::filesystem::exists(db->path / "User.json"));
+    REQUIRE(std::filesystem::exists(db->path / "Post.json"));
+  }
+
+  {
+    auto db = AliasDb::open(dir / "dbdir");
+    REQUIRE(db);
+    REQUIRE(db->count<User>() == 1);
+    REQUIRE(db->count<Post>() == 1);
+  }
+
+  std::filesystem::remove_all(dir);
+}

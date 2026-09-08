@@ -12,6 +12,7 @@ enum class error {
   duplicate_key, ///< insert() で id が既存
   not_found,     ///< update()/remove() で id が不存在
   parse_error,   ///< JSON パース失敗 (または型不一致)
+  foreign_key_violation, ///< 外部キー制約違反
 };
 
 /// @brief 値または glzdb::error を搬載する expected 型
@@ -34,6 +35,8 @@ using result = std::expected<T, error>;
     return "未見つかり";
   case parse_error:
     return "パースエラー";
+  case foreign_key_violation:
+    return "外部キー制約違反";
   }
   return "不明なエラー";
 }

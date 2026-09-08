@@ -198,7 +198,7 @@ struct JsonPartitionedAdapter {  // NOLINT(readability-identifier-naming): 公�
     }
     using T         = std::tuple_element_t<I, State>;
     auto&      rows = std::get<I>(state).rows;
-    const auto file = dir / (std::string{name_of_v<typename T::value_type>} + ".json");
+    const auto file = dir / (std::string{table_key_v<typename T::value_type>} + ".json");
     auto       res  = detail::read_file_into(rows, file);
     if (!res) {
       first_error = res.error();  // ファイルが壊れている
@@ -226,8 +226,32 @@ struct JsonPartitionedAdapter {  // NOLINT(readability-identifier-naming): 公�
     }
     using T          = std::tuple_element_t<I, State>;
     const auto& rows = std::get<I>(state).rows;
-    const auto  file = dir / (std::string{name_of_v<typename T::value_type>} + ".json");
+    const auto  file = dir / (std::string{table_key_v<typename T::value_type>} + ".json");
     first_error      = detail::write_atomic(rows, file);
+  }
+};
+
+/// @brief 永続化しないインメモリ専用アダプタ
+/// @details load は常に空の State を返し、save は no-op。
+///          テスト・一時処理用途。
+struct NullAdapter {  // NOLINT(readability-identifier-naming): 公開API名として CamelCase を維持
+  /// @brief 常に空の State を返す
+  /// @tparam State 状態型
+  /// @param path 未使用
+  /// @return 空の State
+  template <class State>
+  static result<State> load(const std::filesystem::path&) {
+    return State{};
+  }
+
+  /// @brief no-op (何もしない)
+  /// @tparam State 状態型
+  /// @param state 未使用
+  /// @param path 未使用
+  /// @return 常に成功
+  template <class State>
+  static error save(const State&, const std::filesystem::path&) {
+    return {};
   }
 };
 

@@ -87,11 +87,38 @@ consteval auto name_of() {
 template <class T>
 constexpr std::string_view name_of_v = name_of<T>();
 
+/// @brief glz::meta<T>::name が存在するか
+template <class T>
+concept has_meta_name = requires {
+  { glz::meta<T>::name } -> std::convertible_to<std::string_view>;
+};
+
+/// @brief テーブルキー取得 (meta 優先、なければ name_of)
+/// @details ユーザーが glz::meta<T>::name を特殊化した場合はその値を使用。
+///          そうでなければ name_of_v<T> (型の単純名) にフォールバック。
+template <class T>
+consteval std::string_view table_key() {
+  if constexpr (has_meta_name<T>) {
+    return glz::meta<T>::name;
+  } else {
+    return name_of_v<T>;
+  }
+}
+
+/// @brief table_key<T>() の constexpr キャッシング版
+template <class T>
+constexpr std::string_view table_key_v = table_key<T>();
+
+/// @brief スキーマバージョン (ユーザーが特殊化)
+/// @details State 型ごとにバージョンを定義可能。既定は 0。
+template <class State>
+inline constexpr uint64_t schema_version = 0;
+
 namespace detail {
   template <class State, std::size_t... Is>
   constexpr bool has_duplicate_impl(std::index_sequence<Is...>) {
     constexpr std::array<std::string_view, sizeof...(Is)> names{
-        name_of_v<typename std::tuple_element_t<Is, State>::value_type>...};
+        table_key_v<typename std::tuple_element_t<Is, State>::value_type>...};
     for (std::size_t i = 0; i < names.size(); ++i) {
       for (std::size_t j = i + 1; j < names.size(); ++j) {
         if (names[i] == names[j]) {
@@ -104,7 +131,7 @@ namespace detail {
 }  // namespace detail
 
 /// @brief Partitioned 用にテーブル名の重複を検出
-/// @details State タプル内の全テーブルで name_of_v が重複していないか判定
+/// @details State タプル内の全テーブルで table_key_v が重複していないか判定
 /// @tparam State テーブルタプル型
 template <class State>
 constexpr bool has_duplicate_table_names() {
